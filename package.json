@@ -1,7 +1,7 @@
 {
   "name": "mem0-mcpserver",
   "version": "1.0.0",
-  "description": "Serverless MCP memory server — Cloudflare Workers + Supabase pgvector",
+  "description": "Serverless MCP memory server — Cloudflare Workers + D1 + Vectorize",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
@@ -9,7 +9,6 @@
     "types": "wrangler types"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.49.0",
     "agents": "^0.5.0"
   },
   "devDependencies": {

@@ -1,8 +1,8 @@
 export interface Env {
   MCP_AUTH_TOKEN: string;
   OPENAI_API_KEY: string;
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  VECTORIZE: VectorizeIndex;
+  DB: D1Database;
 }
 
 export interface Memory {

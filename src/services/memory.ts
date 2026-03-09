@@ -1,4 +1,3 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Env, ExtractedFacts, Memory, MemoryUpdateResult } from "../types.js";
 import { embed, chatJson } from "./openai.js";
 import { FACT_EXTRACTION_PROMPT } from "../prompts/fact-extraction.js";
@@ -7,8 +6,54 @@ import { MEMORY_UPDATE_PROMPT } from "../prompts/memory-update.js";
 const DEFAULT_USER_ID = "claude-code";
 const DEDUP_THRESHOLD = 0.85;
 
+function generateId(): string {
+  return crypto.randomUUID();
+}
+
+/** Query Vectorize then hydrate full records from D1 */
+async function vectorSearch(
+  env: Env,
+  embedding: number[],
+  userId: string,
+  threshold: number,
+  topK: number,
+): Promise<Memory[]> {
+  const matches = await env.VECTORIZE.query(embedding, {
+    topK,
+    filter: { user_id: userId },
+    returnMetadata: "all",
+  });
+
+  const ids = matches.matches
+    .filter((m) => m.score >= threshold)
+    .map((m) => m.id);
+
+  if (ids.length === 0) return [];
+
+  const placeholders = ids.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE id IN (${placeholders})`,
+  )
+    .bind(...ids)
+    .all<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
+
+  // Build a score map for sorting
+  const scoreMap = new Map(matches.matches.map((m) => [m.id, m.score]));
+
+  return (results || [])
+    .map((r) => ({
+      id: r.id,
+      user_id: r.user_id,
+      text: r.text,
+      metadata: JSON.parse(r.metadata || "{}"),
+      similarity: scoreMap.get(r.id),
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }))
+    .sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+}
+
 export async function addMemory(
-  db: SupabaseClient,
   env: Env,
   text: string,
   userId?: string,
@@ -16,8 +61,8 @@ export async function addMemory(
 ): Promise<{ results: { id: string; memory: string; event: string }[] }> {
   const uid = userId || DEFAULT_USER_ID;
   const results: { id: string; memory: string; event: string }[] = [];
+  const meta = JSON.stringify(metadata || {});
 
-  // Extract facts from the input text
   const { facts } = await chatJson<ExtractedFacts>(
     FACT_EXTRACTION_PROMPT,
     text,
@@ -27,16 +72,9 @@ export async function addMemory(
   for (const fact of facts) {
     const embedding = await embed(fact, env.OPENAI_API_KEY);
 
-    // Check for similar existing memories
-    const { data: similar } = await db.rpc("match_memories", {
-      query_embedding: embedding,
-      query_user_id: uid,
-      match_threshold: DEDUP_THRESHOLD,
-      match_count: 5,
-    });
+    const similar = await vectorSearch(env, embedding, uid, DEDUP_THRESHOLD, 5);
 
-    if (similar && similar.length > 0) {
-      // Ask LLM to decide: update, delete, or add
+    if (similar.length > 0) {
       const existingList = similar
         .map((m: Memory) => `ID: ${m.id}\nText: ${m.text}`)
         .join("\n\n");
@@ -49,47 +87,47 @@ export async function addMemory(
 
       for (const action of decision.memory) {
         if (action.event === "ADD") {
+          const id = generateId();
           const newEmbed = await embed(action.text, env.OPENAI_API_KEY);
-          const { data } = await db
-            .from("memories")
-            .insert({
-              user_id: uid,
-              text: action.text,
-              embedding: newEmbed,
-              metadata: metadata || {},
-            })
-            .select("id")
-            .single();
-          if (data) results.push({ id: data.id, memory: action.text, event: "ADD" });
+          await env.DB.prepare(
+            "INSERT INTO memories (id, user_id, text, metadata) VALUES (?, ?, ?, ?)",
+          )
+            .bind(id, uid, action.text, meta)
+            .run();
+          await env.VECTORIZE.upsert([
+            { id, values: newEmbed, metadata: { user_id: uid } },
+          ]);
+          results.push({ id, memory: action.text, event: "ADD" });
         } else if (action.event === "UPDATE") {
           const updatedEmbed = await embed(action.text, env.OPENAI_API_KEY);
-          await db
-            .from("memories")
-            .update({
-              text: action.text,
-              embedding: updatedEmbed,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", action.id);
+          await env.DB.prepare(
+            "UPDATE memories SET text = ?, updated_at = datetime('now') WHERE id = ?",
+          )
+            .bind(action.text, action.id)
+            .run();
+          await env.VECTORIZE.upsert([
+            { id: action.id, values: updatedEmbed, metadata: { user_id: uid } },
+          ]);
           results.push({ id: action.id, memory: action.text, event: "UPDATE" });
         } else if (action.event === "DELETE") {
-          await db.from("memories").delete().eq("id", action.id);
+          await env.DB.prepare("DELETE FROM memories WHERE id = ?")
+            .bind(action.id)
+            .run();
+          await env.VECTORIZE.deleteByIds([action.id]);
           results.push({ id: action.id, memory: action.text, event: "DELETE" });
         }
       }
     } else {
-      // No similar memories — just add
-      const { data } = await db
-        .from("memories")
-        .insert({
-          user_id: uid,
-          text: fact,
-          embedding: embedding,
-          metadata: metadata || {},
-        })
-        .select("id")
-        .single();
-      if (data) results.push({ id: data.id, memory: fact, event: "ADD" });
+      const id = generateId();
+      await env.DB.prepare(
+        "INSERT INTO memories (id, user_id, text, metadata) VALUES (?, ?, ?, ?)",
+      )
+        .bind(id, uid, fact, meta)
+        .run();
+      await env.VECTORIZE.upsert([
+        { id, values: embedding, metadata: { user_id: uid } },
+      ]);
+      results.push({ id, memory: fact, event: "ADD" });
     }
   }
 
@@ -97,7 +135,6 @@ export async function addMemory(
 }
 
 export async function searchMemories(
-  db: SupabaseClient,
   env: Env,
   query: string,
   userId?: string,
@@ -105,80 +142,107 @@ export async function searchMemories(
 ): Promise<{ results: Memory[] }> {
   const uid = userId || DEFAULT_USER_ID;
   const embedding = await embed(query, env.OPENAI_API_KEY);
-
-  const { data, error } = await db.rpc("match_memories", {
-    query_embedding: embedding,
-    query_user_id: uid,
-    match_threshold: 0.5,
-    match_count: limit,
-  });
-
-  if (error) throw new Error(`Search error: ${error.message}`);
-  return { results: data || [] };
+  const results = await vectorSearch(env, embedding, uid, 0.5, limit);
+  return { results };
 }
 
 export async function listMemories(
-  db: SupabaseClient,
+  env: Env,
   userId?: string,
 ): Promise<Memory[]> {
   const uid = userId || DEFAULT_USER_ID;
-  const { data, error } = await db
-    .from("memories")
-    .select("id, user_id, text, metadata, created_at, updated_at")
-    .eq("user_id", uid)
-    .order("updated_at", { ascending: false });
+  const { results } = await env.DB.prepare(
+    "SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC",
+  )
+    .bind(uid)
+    .all<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
-  if (error) throw new Error(`List error: ${error.message}`);
-  return data || [];
+  return (results || []).map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    text: r.text,
+    metadata: JSON.parse(r.metadata || "{}"),
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  }));
 }
 
 export async function getMemory(
-  db: SupabaseClient,
+  env: Env,
   memoryId: string,
 ): Promise<Memory> {
-  const { data, error } = await db
-    .from("memories")
-    .select("id, user_id, text, metadata, created_at, updated_at")
-    .eq("id", memoryId)
-    .single();
+  const r = await env.DB.prepare(
+    "SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE id = ?",
+  )
+    .bind(memoryId)
+    .first<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
-  if (error) throw new Error(`Get error: ${error.message}`);
-  return data;
+  if (!r) throw new Error("Memory not found");
+  return {
+    id: r.id,
+    user_id: r.user_id,
+    text: r.text,
+    metadata: JSON.parse(r.metadata || "{}"),
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  };
 }
 
 export async function updateMemory(
-  db: SupabaseClient,
   env: Env,
   memoryId: string,
   text: string,
 ): Promise<Memory> {
+  // Get existing memory to know the user_id
+  const existing = await getMemory(env, memoryId);
   const embedding = await embed(text, env.OPENAI_API_KEY);
-  const { data, error } = await db
-    .from("memories")
-    .update({ text, embedding, updated_at: new Date().toISOString() })
-    .eq("id", memoryId)
-    .select("id, user_id, text, metadata, created_at, updated_at")
-    .single();
 
-  if (error) throw new Error(`Update error: ${error.message}`);
-  return data;
+  await env.DB.prepare(
+    "UPDATE memories SET text = ?, updated_at = datetime('now') WHERE id = ?",
+  )
+    .bind(text, memoryId)
+    .run();
+
+  await env.VECTORIZE.upsert([
+    { id: memoryId, values: embedding, metadata: { user_id: existing.user_id } },
+  ]);
+
+  return getMemory(env, memoryId);
 }
 
 export async function deleteMemory(
-  db: SupabaseClient,
+  env: Env,
   memoryId: string,
 ): Promise<{ message: string }> {
-  const { error } = await db.from("memories").delete().eq("id", memoryId);
-  if (error) throw new Error(`Delete error: ${error.message}`);
+  await env.DB.prepare("DELETE FROM memories WHERE id = ?")
+    .bind(memoryId)
+    .run();
+  await env.VECTORIZE.deleteByIds([memoryId]);
   return { message: "Memory deleted" };
 }
 
 export async function deleteAllMemories(
-  db: SupabaseClient,
+  env: Env,
   userId?: string,
 ): Promise<{ message: string }> {
   const uid = userId || DEFAULT_USER_ID;
-  const { error } = await db.from("memories").delete().eq("user_id", uid);
-  if (error) throw new Error(`Delete all error: ${error.message}`);
+
+  // Get all IDs to delete from Vectorize
+  const { results } = await env.DB.prepare(
+    "SELECT id FROM memories WHERE user_id = ?",
+  )
+    .bind(uid)
+    .all<{ id: string }>();
+
+  const ids = (results || []).map((r) => r.id);
+
+  await env.DB.prepare("DELETE FROM memories WHERE user_id = ?")
+    .bind(uid)
+    .run();
+
+  if (ids.length > 0) {
+    await env.VECTORIZE.deleteByIds(ids);
+  }
+
   return { message: "All memories deleted" };
 }

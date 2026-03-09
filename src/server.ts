@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./types.js";
-import { getSupabase } from "./services/supabase.js";
 import {
   addMemory,
   searchMemories,
@@ -14,7 +13,6 @@ import {
 
 export function createServer(env: Env): McpServer {
   const server = new McpServer({ name: "mem0-memory", version: "1.0.0" }, {});
-  const db = getSupabase(env);
 
   server.tool(
     "add_memory",
@@ -25,7 +23,7 @@ export function createServer(env: Env): McpServer {
       metadata: z.record(z.string(), z.unknown()).optional().describe("Key-value metadata to attach"),
     },
     async ({ text, user_id, metadata }) => {
-      const result = await addMemory(db, env, text, user_id, metadata);
+      const result = await addMemory(env, text, user_id, metadata);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -39,7 +37,7 @@ export function createServer(env: Env): McpServer {
       limit: z.number().optional().default(10).describe("Max results (default 10)"),
     },
     async ({ query, user_id, limit }) => {
-      const result = await searchMemories(db, env, query, user_id, limit);
+      const result = await searchMemories(env, query, user_id, limit);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -51,7 +49,7 @@ export function createServer(env: Env): McpServer {
       user_id: z.string().optional().describe("User identifier to filter by"),
     },
     async ({ user_id }) => {
-      const result = await listMemories(db, user_id);
+      const result = await listMemories(env, user_id);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -63,7 +61,7 @@ export function createServer(env: Env): McpServer {
       memory_id: z.string().describe("The unique memory identifier"),
     },
     async ({ memory_id }) => {
-      const result = await getMemory(db, memory_id);
+      const result = await getMemory(env, memory_id);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -76,7 +74,7 @@ export function createServer(env: Env): McpServer {
       text: z.string().describe("The new content for this memory"),
     },
     async ({ memory_id, text }) => {
-      const result = await updateMemory(db, env, memory_id, text);
+      const result = await updateMemory(env, memory_id, text);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -88,7 +86,7 @@ export function createServer(env: Env): McpServer {
       memory_id: z.string().describe("The unique memory identifier to delete"),
     },
     async ({ memory_id }) => {
-      const result = await deleteMemory(db, memory_id);
+      const result = await deleteMemory(env, memory_id);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -100,7 +98,7 @@ export function createServer(env: Env): McpServer {
       user_id: z.string().optional().describe("User identifier (default: claude-code)"),
     },
     async ({ user_id }) => {
-      const result = await deleteAllMemories(db, user_id);
+      const result = await deleteAllMemories(env, user_id);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );

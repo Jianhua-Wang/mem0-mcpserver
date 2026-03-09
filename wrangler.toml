@@ -5,3 +5,12 @@ compatibility_flags = ["nodejs_compat"]
 
 [observability]
 enabled = true
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "memories"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mem0"
+database_id = "6b72555d-fe8a-41e9-8dc4-e69d24d2dc14"
