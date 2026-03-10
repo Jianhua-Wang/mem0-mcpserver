@@ -135,7 +135,7 @@ export async function searchMemories(
   limit: number = 10,
 ): Promise<{ results: Memory[] }> {
   const embedding = await embed(query, env.OPENAI_API_KEY);
-  const results = await vectorSearch(env, embedding, 0.5, limit);
+  const results = await vectorSearch(env, embedding, 0.3, limit);
   return { results };
 }
 
