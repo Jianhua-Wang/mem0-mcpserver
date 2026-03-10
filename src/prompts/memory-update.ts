@@ -16,4 +16,5 @@ Rules:
 - Only return "ADD" if the fact is truly new and not already captured
 - Prefer "UPDATE" over "ADD" + "DELETE" when the fact is an evolution of an existing memory
 - Be conservative: if unsure, return "NONE"
+- IMPORTANT: Always respond in the SAME LANGUAGE as the new fact. Keep the text in its original language.
 - Return ONLY the JSON object`;

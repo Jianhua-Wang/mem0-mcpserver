@@ -21,4 +21,5 @@ Output: {"facts": ["Has weekly team meeting every Monday at 10am"]}
 Return the facts in a JSON object with a single key "facts" containing an array of strings.
 You must return at least one fact and at most 5 facts.
 If the input is very short or simple, return a single fact.
+IMPORTANT: Always respond in the SAME LANGUAGE as the input. If the input is in Chinese, output facts in Chinese. If the input is in English, output facts in English.
 Return ONLY the JSON object, no other text.`;
