@@ -141,11 +141,13 @@ export async function searchMemories(
 
 export async function listMemories(
   env: Env,
+  limit: number = 50,
+  offset: number = 0,
 ): Promise<Memory[]> {
   const { results } = await env.DB.prepare(
-    "SELECT id, text, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC",
+    "SELECT id, text, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
   )
-    .bind(USER_ID)
+    .bind(USER_ID, limit, offset)
     .all<{ id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
   return (results || []).map((r) => ({

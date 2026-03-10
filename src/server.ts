@@ -42,10 +42,13 @@ export function createServer(env: Env): McpServer {
 
   server.tool(
     "list_memories",
-    "List all stored memories.",
-    {},
-    async () => {
-      const result = await listMemories(env);
+    "List stored memories, ordered by most recently updated.",
+    {
+      limit: z.number().optional().default(50).describe("Max results (default 50)"),
+      offset: z.number().optional().default(0).describe("Number of results to skip (default 0)"),
+    },
+    async ({ limit, offset }) => {
+      const result = await listMemories(env, limit, offset);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
