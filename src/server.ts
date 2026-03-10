@@ -19,11 +19,10 @@ export function createServer(env: Env): McpServer {
     "Store a memory. The system will automatically extract and deduplicate facts.",
     {
       text: z.string().describe("The content to remember"),
-      user_id: z.string().optional().describe("User identifier (default: claude-code)"),
       metadata: z.record(z.string(), z.unknown()).optional().describe("Key-value metadata to attach"),
     },
-    async ({ text, user_id, metadata }) => {
-      const result = await addMemory(env, text, user_id, metadata);
+    async ({ text, metadata }) => {
+      const result = await addMemory(env, text, metadata);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -33,11 +32,10 @@ export function createServer(env: Env): McpServer {
     "Semantic search across stored memories.",
     {
       query: z.string().describe("Natural language search query"),
-      user_id: z.string().optional().describe("User identifier to scope the search"),
       limit: z.number().optional().default(10).describe("Max results (default 10)"),
     },
-    async ({ query, user_id, limit }) => {
-      const result = await searchMemories(env, query, user_id, limit);
+    async ({ query, limit }) => {
+      const result = await searchMemories(env, query, limit);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -45,11 +43,9 @@ export function createServer(env: Env): McpServer {
   server.tool(
     "list_memories",
     "List all stored memories.",
-    {
-      user_id: z.string().optional().describe("User identifier to filter by"),
-    },
-    async ({ user_id }) => {
-      const result = await listMemories(env, user_id);
+    {},
+    async () => {
+      const result = await listMemories(env);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -93,12 +89,10 @@ export function createServer(env: Env): McpServer {
 
   server.tool(
     "delete_all_memories",
-    "Delete ALL memories for a user. Use with caution!",
-    {
-      user_id: z.string().optional().describe("User identifier (default: claude-code)"),
-    },
-    async ({ user_id }) => {
-      const result = await deleteAllMemories(env, user_id);
+    "Delete ALL memories. Use with caution!",
+    {},
+    async () => {
+      const result = await deleteAllMemories(env);
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );

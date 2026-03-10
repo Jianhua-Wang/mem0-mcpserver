@@ -7,7 +7,6 @@ export interface Env {
 
 export interface Memory {
   id: string;
-  user_id: string;
   text: string;
   metadata: Record<string, unknown>;
   similarity?: number;

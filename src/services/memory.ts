@@ -3,7 +3,7 @@ import { embed, chatJson } from "./openai.js";
 import { FACT_EXTRACTION_PROMPT } from "../prompts/fact-extraction.js";
 import { MEMORY_UPDATE_PROMPT } from "../prompts/memory-update.js";
 
-const DEFAULT_USER_ID = "claude-code";
+const USER_ID = "default";
 const DEDUP_THRESHOLD = 0.85;
 
 function generateId(): string {
@@ -14,13 +14,12 @@ function generateId(): string {
 async function vectorSearch(
   env: Env,
   embedding: number[],
-  userId: string,
   threshold: number,
   topK: number,
 ): Promise<Memory[]> {
   const matches = await env.VECTORIZE.query(embedding, {
     topK,
-    filter: { user_id: userId },
+    filter: { user_id: USER_ID },
     returnMetadata: "all",
   });
 
@@ -32,18 +31,16 @@ async function vectorSearch(
 
   const placeholders = ids.map(() => "?").join(",");
   const { results } = await env.DB.prepare(
-    `SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE id IN (${placeholders})`,
+    `SELECT id, text, metadata, created_at, updated_at FROM memories WHERE id IN (${placeholders})`,
   )
     .bind(...ids)
-    .all<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
+    .all<{ id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
-  // Build a score map for sorting
   const scoreMap = new Map(matches.matches.map((m) => [m.id, m.score]));
 
   return (results || [])
     .map((r) => ({
       id: r.id,
-      user_id: r.user_id,
       text: r.text,
       metadata: JSON.parse(r.metadata || "{}"),
       similarity: scoreMap.get(r.id),
@@ -56,10 +53,8 @@ async function vectorSearch(
 export async function addMemory(
   env: Env,
   text: string,
-  userId?: string,
   metadata?: Record<string, unknown>,
 ): Promise<{ results: { id: string; memory: string; event: string }[] }> {
-  const uid = userId || DEFAULT_USER_ID;
   const results: { id: string; memory: string; event: string }[] = [];
   const meta = JSON.stringify(metadata || {});
 
@@ -72,7 +67,7 @@ export async function addMemory(
   for (const fact of facts) {
     const embedding = await embed(fact, env.OPENAI_API_KEY);
 
-    const similar = await vectorSearch(env, embedding, uid, DEDUP_THRESHOLD, 5);
+    const similar = await vectorSearch(env, embedding, DEDUP_THRESHOLD, 5);
 
     if (similar.length > 0) {
       const existingList = similar
@@ -92,10 +87,10 @@ export async function addMemory(
           await env.DB.prepare(
             "INSERT INTO memories (id, user_id, text, metadata) VALUES (?, ?, ?, ?)",
           )
-            .bind(id, uid, action.text, meta)
+            .bind(id, USER_ID, action.text, meta)
             .run();
           await env.VECTORIZE.upsert([
-            { id, values: newEmbed, metadata: { user_id: uid } },
+            { id, values: newEmbed, metadata: { user_id: USER_ID } },
           ]);
           results.push({ id, memory: action.text, event: "ADD" });
         } else if (action.event === "UPDATE") {
@@ -106,7 +101,7 @@ export async function addMemory(
             .bind(action.text, action.id)
             .run();
           await env.VECTORIZE.upsert([
-            { id: action.id, values: updatedEmbed, metadata: { user_id: uid } },
+            { id: action.id, values: updatedEmbed, metadata: { user_id: USER_ID } },
           ]);
           results.push({ id: action.id, memory: action.text, event: "UPDATE" });
         } else if (action.event === "DELETE") {
@@ -122,10 +117,10 @@ export async function addMemory(
       await env.DB.prepare(
         "INSERT INTO memories (id, user_id, text, metadata) VALUES (?, ?, ?, ?)",
       )
-        .bind(id, uid, fact, meta)
+        .bind(id, USER_ID, fact, meta)
         .run();
       await env.VECTORIZE.upsert([
-        { id, values: embedding, metadata: { user_id: uid } },
+        { id, values: embedding, metadata: { user_id: USER_ID } },
       ]);
       results.push({ id, memory: fact, event: "ADD" });
     }
@@ -137,29 +132,24 @@ export async function addMemory(
 export async function searchMemories(
   env: Env,
   query: string,
-  userId?: string,
   limit: number = 10,
 ): Promise<{ results: Memory[] }> {
-  const uid = userId || DEFAULT_USER_ID;
   const embedding = await embed(query, env.OPENAI_API_KEY);
-  const results = await vectorSearch(env, embedding, uid, 0.5, limit);
+  const results = await vectorSearch(env, embedding, 0.5, limit);
   return { results };
 }
 
 export async function listMemories(
   env: Env,
-  userId?: string,
 ): Promise<Memory[]> {
-  const uid = userId || DEFAULT_USER_ID;
   const { results } = await env.DB.prepare(
-    "SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC",
+    "SELECT id, text, metadata, created_at, updated_at FROM memories WHERE user_id = ? ORDER BY updated_at DESC",
   )
-    .bind(uid)
-    .all<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
+    .bind(USER_ID)
+    .all<{ id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
   return (results || []).map((r) => ({
     id: r.id,
-    user_id: r.user_id,
     text: r.text,
     metadata: JSON.parse(r.metadata || "{}"),
     created_at: r.created_at,
@@ -172,15 +162,14 @@ export async function getMemory(
   memoryId: string,
 ): Promise<Memory> {
   const r = await env.DB.prepare(
-    "SELECT id, user_id, text, metadata, created_at, updated_at FROM memories WHERE id = ?",
+    "SELECT id, text, metadata, created_at, updated_at FROM memories WHERE id = ?",
   )
     .bind(memoryId)
-    .first<{ id: string; user_id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
+    .first<{ id: string; text: string; metadata: string; created_at: string; updated_at: string }>();
 
   if (!r) throw new Error("Memory not found");
   return {
     id: r.id,
-    user_id: r.user_id,
     text: r.text,
     metadata: JSON.parse(r.metadata || "{}"),
     created_at: r.created_at,
@@ -193,8 +182,6 @@ export async function updateMemory(
   memoryId: string,
   text: string,
 ): Promise<Memory> {
-  // Get existing memory to know the user_id
-  const existing = await getMemory(env, memoryId);
   const embedding = await embed(text, env.OPENAI_API_KEY);
 
   await env.DB.prepare(
@@ -204,7 +191,7 @@ export async function updateMemory(
     .run();
 
   await env.VECTORIZE.upsert([
-    { id: memoryId, values: embedding, metadata: { user_id: existing.user_id } },
+    { id: memoryId, values: embedding, metadata: { user_id: USER_ID } },
   ]);
 
   return getMemory(env, memoryId);
@@ -223,21 +210,17 @@ export async function deleteMemory(
 
 export async function deleteAllMemories(
   env: Env,
-  userId?: string,
 ): Promise<{ message: string }> {
-  const uid = userId || DEFAULT_USER_ID;
-
-  // Get all IDs to delete from Vectorize
   const { results } = await env.DB.prepare(
     "SELECT id FROM memories WHERE user_id = ?",
   )
-    .bind(uid)
+    .bind(USER_ID)
     .all<{ id: string }>();
 
   const ids = (results || []).map((r) => r.id);
 
   await env.DB.prepare("DELETE FROM memories WHERE user_id = ?")
-    .bind(uid)
+    .bind(USER_ID)
     .run();
 
   if (ids.length > 0) {
